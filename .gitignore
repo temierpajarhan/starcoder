@@ -1,0 +1,16 @@
+# Node / TypeScript / Hardhat
+node_modules/
+dist/
+.cache/
+.env
+.env.*
+*.log
+coverage/
+typechain/
+artifacts/
+# IDE
+.idea/
+.vscode/
+.DS_Store
+# Runs
+runs/

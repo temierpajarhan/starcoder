@@ -1,0 +1,26 @@
+{
+  "name": "pendle-flooping-mainnet",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "hardhat compile",
+    "deploy": "hardhat run scripts/deploy.hardhat.ts --network arbitrum",
+    "simulate": "ts-node scripts/simulate.ts",
+    "runOnce": "ts-node scripts/runOnce.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.2",
+    "@types/node": "^20.12.12",
+    "commander": "^12.1.0",
+    "viem": "^2.21.28"
+  },
+  "devDependencies": {
+    "hardhat": "^2.22.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5",
+    "@nomicfoundation/hardhat-ethers": "^3.0.5",
+    "@nomicfoundation/hardhat-verify": "^2.0.6"
+  }
+}
