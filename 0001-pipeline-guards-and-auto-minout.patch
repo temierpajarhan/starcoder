@@ -1,0 +1,330 @@
+diff --git a/scripts/lib/ratelimit.ts b/scripts/lib/ratelimit.ts
+new file mode 100644
+--- /dev/null
++++ b/scripts/lib/ratelimit.ts
+@@ -0,0 +1,34 @@
++// scripts/lib/ratelimit.ts
++export function qpsLimiter(qps: number) {
++  const windowMs = 1000;
++  const times: number[] = [];
++  async function limit() {
++    const now = Date.now();
++    while (times.length && now - times[0] >= windowMs) times.shift();
++    if (times.length >= qps) {
++      const waitMs = windowMs - (now - times[0]) + 1;
++      await new Promise(r => setTimeout(r, waitMs));
++      return limit();
++    }
++    times.push(Date.now());
++  }
++  return limit;
++}
++
++const QPS = Number(process.env.RPC_QPS || '10'); // default 10 req/s
++export const rpcLimit = qpsLimiter(QPS);
++
++export async function withRpc<T>(fn: () => Promise<T>): Promise<T> {
++  await rpcLimit();
++  return fn();
++}
+diff --git a/scripts/lib/locks.ts b/scripts/lib/locks.ts
+new file mode 100644
+--- /dev/null
++++ b/scripts/lib/locks.ts
+@@ -0,0 +1,36 @@
++// scripts/lib/locks.ts
++import fs from 'fs';
++import path from 'path';
++
++const ROOT = path.join(process.cwd(), '.locks');
++if (!fs.existsSync(ROOT)) fs.mkdirSync(ROOT, { recursive: true });
++
++export async function withLock<T>(name: string, fn: () => Promise<T>, timeoutMs = 60_000): Promise<T> {
++  const file = path.join(ROOT, name + '.lock');
++  const start = Date.now();
++  while (true) {
++    try {
++      const fd = fs.openSync(file, 'wx'); // exclusive create
++      try {
++        const res = await fn();
++        return res;
++      } finally {
++        try { fs.closeSync(fd); } catch {}
++        try { fs.unlinkSync(file); } catch {}
++      }
++    } catch (e) {
++      if (Date.now() - start > timeoutMs) throw new Error(`Lock timeout: ${name}`);
++      await new Promise(r => setTimeout(r, 150)); // small backoff
++    }
++  }
++}
+diff --git a/scripts/runOnce.ts b/scripts/runOnce.ts
+index 1111111..2222222 100644
+--- a/scripts/runOnce.ts
++++ b/scripts/runOnce.ts
+@@ -1,200 +1,247 @@
+-import 'dotenv/config';
+-import { Command } from 'commander';
+-import { ethers } from 'ethers';
+-import fs from 'fs';
+-import path from 'path';
+-import { getAbiFromArbiscan } from './lib/fetchAbi.js';
+-import { Erc20Abi, VaultAbi, MarketAbiFrag } from './lib/helpers.js';
+-
+-const program = new Command();
+-program
+-  .requiredOption('--executor <addr>', 'Deployed FlashFloopExecutor')
+-  .requiredOption('--market <addr>', 'Pendle Market address')
+-  .requiredOption('--loanToken <addr>', 'Token to borrow (must be accepted by SY w/o aggregator)')
+-  .requiredOption('--amount <num>', 'Amount to borrow, natural units')
+-  .option('--loops <n>', 'Internal loops', '1')
+-  .option('--minProfit <num>', 'Min profit in loanToken', '0')
+-  .option('--recipient <addr>', 'Where to send leftovers', '')
+-  .parse(process.argv);
+-const opts = program.opts();
+-
+-async function main() {
+-  const rpc = process.env.ARBITRUM_RPC!;
+-  const pk = process.env.PRIVATE_KEY!;
+-  const provider = new ethers.JsonRpcProvider(rpc);
+-  const wallet = new ethers.Wallet(pk, provider);
+-
+-  const market = opts.market as string;
+-  const loanToken = opts.loanToken as string;
+-  const loops = parseInt(opts.loops);
+-  const amountHuman = opts.amount as string;
+-  const minProfitHuman = opts.minProfit as string;
+-  const recipient = (opts.recipient || wallet.address) as string;
+-
+-  const cfg = JSON.parse(fs.readFileSync(path.join('config','addresses.arbitrum.json'),'utf8'));
+-  const routerAddr = cfg.arbitrum.pendleRouterV3 as string;
+-  const routerAbi = await getAbiFromArbiscan(routerAddr);
+-  const marketAbi = await getAbiFromArbiscan(market);
+-
+-  const marketRead = new ethers.Contract(market, MarketAbiFrag, provider);
+-  const [SY, PT, YT] = await marketRead.readTokens();
+-
+-  const loanErc = new ethers.Contract(loanToken, Erc20Abi, provider);
+-  const dec = await loanErc.decimals();
+-  const amount = ethers.parseUnits(amountHuman, dec);
+-  const minProfit = ethers.parseUnits(minProfitHuman, dec);
+-
+-  const executor = new ethers.Contract(opts.executor, [
+-    'function execute((address[],bytes[],address,uint256,uint256,address)) external',
+-    'function owner() view returns (address)'
+-  ], wallet);
+-
+-  const router = new ethers.Contract(routerAddr, routerAbi, provider);
+-  const approxZero = { guessMin: 0, guessMax: 0, guessOffchain: 0, maxIteration: 0, eps: 0 };
+-  const emptyLimit = { limitRouter: ethers.ZeroAddress, epsSkipMarket: 0, normalFills: [], flashFills: [], optData: "0x" };
+-  const zeroSwapData = { swapType: 0, extRouter: ethers.ZeroAddress, extCalldata: "0x", needScale: false };
+-
+-  const targets: string[] = [];
+-  the datas: string[] = [];
+-
+-  let curIn = amount;
+-
+-  for (let i = 0; i < loops; i++) {
+-    targets.push(loanToken);
+-    datas.push(new ethers.Interface(Erc20Abi).encodeFunctionData('approve', [routerAddr, ethers.MaxUint256]));
+-
+-    const tokenInput = {
+-      tokenIn: loanToken,
+-      netTokenIn: curIn,
+-      tokenMintSy: SY,
+-      pendleSwap: ethers.ZeroAddress,
+-      swapData: zeroSwapData
+-    };
+-    targets.push(routerAddr);
+-    datas.push(new ethers.Interface(routerAbi).encodeFunctionData('mintPyFromToken', [
+-      wallet.address, YT, 0, tokenInput
+-    ]));
+-
+-    const tokenOut = {
+-      tokenOut: loanToken,
+-      minTokenOut: 0,
+-      tokenRedeemSy: SY,
+-      pendleSwap: ethers.ZeroAddress,
+-      swapData: zeroSwapData
+-    };
+-    targets.push(routerAddr);
+-    datas.push(new ethers.Interface(routerAbi).encodeFunctionData('swapExactPtForToken', [
+-      wallet.address, market, curIn, tokenOut, emptyLimit
+-    ]));
+-
+-    // NEXT loop principal is set externally by executor balances
+-  }
+-
+-  const plan = {
+-    targets,
+-    calldatas: datas,
+-    loanToken,
+-    loanAmount: amount,
+-    minProfit,
+-    profitRecipient: recipient
+-  };
+-
+-  const tx = await executor.execute(plan);
+-  console.log('Submitted tx:', tx.hash);
+-  const rc = await tx.wait();
+-  console.log('Mined in block', rc.blockNumber);
+-}
+-
+-main().catch(e => { console.error(e); process.exit(1); });
++import 'dotenv/config';
++import { Command } from 'commander';
++import { ethers } from 'ethers';
++import fs from 'fs';
++import path from 'path';
++import { getAbiFromArbiscan } from './lib/fetchAbi.js';
++import { Erc20Abi, MarketAbiFrag } from './lib/helpers.js';
++import { withRpc } from './lib/ratelimit.js';
++import { withLock } from './lib/locks.js';
++
++const program = new Command();
++program
++  .requiredOption('--executor <addr>', 'Deployed FlashFloopExecutor')
++  .requiredOption('--market <addr>', 'Pendle Market address')
++  .requiredOption('--loanToken <addr>', 'Token to borrow (must be accepted by SY w/o aggregator)')
++  .requiredOption('--amount <num>', 'Amount to borrow, natural units')
++  .option('--loops <n>', 'Internal loops', '1')
++  .option('--minProfit <num>', 'Min profit in loanToken', '0')
++  .option('--recipient <addr>', 'Where to send leftovers', '')
++  .option('--slippageBps <n>', 'Slippage bps for PT->loanToken minOut', '50')
++  .parse(process.argv);
++const opts = program.opts();
++
++function bpsMulFloor(x: bigint, bps: number) {
++  const bp = BigInt(10_000 - bps);
++  return x * bp / 10_000n;
++}
++
++async function main() {
++  const rpc = process.env.ARBITRUM_RPC!;
++  const pk = process.env.PRIVATE_KEY!;
++  const provider = new ethers.JsonRpcProvider(rpc);
++  const wallet = new ethers.Wallet(pk, provider);
++
++  const market = (opts.market as string).toLowerCase();
++  const loanToken = (opts.loanToken as string).toLowerCase();
++  const loops = parseInt(opts.loops);
++  const amountHuman = opts.amount as string;
++  const minProfitHuman = opts.minProfit as string;
++  const slippageBps = parseInt(opts.slippageBps);
++  const recipient = (opts.recipient || wallet.address) as string;
++
++  // addresses / ABIs
++  const cfg = JSON.parse(fs.readFileSync(path.join('config','addresses.arbitrum.json'),'utf8'));
++  const routerAddr = (cfg.arbitrum.pendleRouterV3 as string).toLowerCase();
++  const routerAbi = await getAbiFromArbiscan(routerAddr);
++  const marketAbi = await getAbiFromArbiscan(market);
++
++  const marketRead = new ethers.Contract(market, MarketAbiFrag, provider);
++  const [SY, PT, YT] = await withRpc(() => marketRead.readTokens());
++
++  const loanErc = new ethers.Contract(loanToken, Erc20Abi, provider);
++  const dec = await withRpc(() => loanErc.decimals());
++  const amount = ethers.parseUnits(amountHuman, dec);
++  const minProfit = ethers.parseUnits(minProfitHuman, dec);
++
++  const executor = new ethers.Contract(opts.executor, [
++    'function execute((address[],bytes[],address,uint256,uint256,address)) external',
++    'function owner() view returns (address)'
++  ], wallet);
++
++  const router = new ethers.Contract(routerAddr, routerAbi, provider);
++  const emptyLimit = { limitRouter: ethers.ZeroAddress, epsSkipMarket: 0, normalFills: [], flashFills: [], optData: "0x" };
++  const zeroSwapData = { swapType: 0, extRouter: ethers.ZeroAddress, extCalldata: "0x", needScale: false };
++
++  const targets: string[] = [];
++  const datas: string[] = [];
++
++  // idempotent approve
++  targets.push(loanToken);
++  datas.push(new ethers.Interface(Erc20Abi).encodeFunctionData('approve', [routerAddr, ethers.MaxUint256]));
++
++  let curIn = amount;
++  for (let i = 0; i < loops; i++) {
++    // 1) view: mint PY quote
++    const tokenInput = {
++      tokenIn: loanToken,
++      netTokenIn: curIn,
++      tokenMintSy: SY,
++      pendleSwap: ethers.ZeroAddress,
++      swapData: zeroSwapData
++    };
++    const [netPyOut] = await withRpc(() => router.callStatic.mintPyFromToken(
++      ethers.ZeroAddress, YT, 0, tokenInput, { value: 0 }
++    ));
++
++    // 2) view: PT -> loanToken quote
++    const tokenOutPT = {
++      tokenOut: loanToken,
++      minTokenOut: 0,
++      tokenRedeemSy: SY,
++      pendleSwap: ethers.ZeroAddress,
++      swapData: zeroSwapData
++    };
++    const quotePTOut = await withRpc(() => router.callStatic.swapExactPtForToken(
++      ethers.ZeroAddress, market, netPyOut, tokenOutPT, emptyLimit
++    ));
++    const minOutPT = bpsMulFloor(quotePTOut, slippageBps);
++
++    // 3) encode actual calls with minOut
++    targets.push(routerAddr);
++    datas.push(new ethers.Interface(routerAbi).encodeFunctionData('mintPyFromToken', [
++      wallet.address, YT, 0, tokenInput
++    ]));
++
++    const tokenOutExec = {
++      tokenOut: loanToken,
++      minTokenOut: minOutPT,
++      tokenRedeemSy: SY,
++      pendleSwap: ethers.ZeroAddress,
++      swapData: zeroSwapData
++    };
++    targets.push(routerAddr);
++    datas.push(new ethers.Interface(routerAbi).encodeFunctionData('swapExactPtForToken', [
++      wallet.address, market, netPyOut, tokenOutExec, emptyLimit
++    ]));
++
++    // next loop will use minOutPT as principal for conservative chaining
++    curIn = minOutPT;
++  }
++
++  const plan = {
++    targets,
++    calldatas: datas,
++    loanToken,
++    loanAmount: amount,
++    minProfit,
++    profitRecipient: recipient
++  };
++
++  // pre balances (for profit log)
++  const preToken = await withRpc(() => loanErc.balanceOf(recipient));
++  const preEth   = await withRpc(() => provider.getBalance(wallet.address));
++
++  const nonceKey  = `nonce-${wallet.address.toLowerCase()}`;
++  const marketKey = `mkt-${market}-${loanToken}`;
++
++  await withLock(marketKey, async () => {
++    await withLock(nonceKey, async () => {
++      const tx = await executor.execute(plan);
++      console.log('Submitted tx:', tx.hash);
++      const rc = await tx.wait();
++      console.log('Mined in block', rc.blockNumber);
++
++      const postToken = await withRpc(() => loanErc.balanceOf(recipient));
++      const postEth   = await withRpc(() => provider.getBalance(wallet.address));
++
++      const tokenDelta = postToken - preToken;
++      const gasCostWei = rc.gasUsed * (rc.effectiveGasPrice ?? 0n);
++      const gasEth     = ethers.formatEther(gasCostWei);
++      console.log(`Profit(loanToken) delta: ${tokenDelta.toString()}`);
++      console.log(`GasCost(ETH): ${gasEth}`);
++    });
++  });
++}
++
++main().catch(e => { console.error(e); process.exit(1); });

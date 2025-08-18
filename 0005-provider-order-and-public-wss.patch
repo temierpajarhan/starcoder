@@ -1,0 +1,122 @@
+diff --git a/scripts/lib/provider.ts b/scripts/lib/provider.ts
+index 1111111..2222222 100644
+--- a/scripts/lib/provider.ts
++++ b/scripts/lib/provider.ts
+@@ -1,15 +1,15 @@
+-// scripts/lib/provider.ts
+-import { JsonRpcProvider, WebSocketProvider, Provider } from 'ethers';
++// scripts/lib/provider.ts
++import { JsonRpcProvider, WebSocketProvider, Provider } from 'ethers';
+ import dns from 'node:dns';
+ import { setGlobalDispatcher, ProxyAgent } from 'undici';
+ 
+ // IPv4 приоритет
+ try { (dns as any).setDefaultResultOrder?.('ipv4first'); } catch {}
+@@
+ const ARB_CHAIN_ID_HEX = '0xa4b1'; // 42161
+ const TIMEOUT_MS = Number(process.env.RPC_PROBE_TIMEOUT_MS || 6000);
+@@
+ export async function getArbProvider(): Promise<Provider> {
+-  // Список HTTP кандидатов: env → Alchemy → Infura → public
+-  const httpCand: string[] = []
+-  if (process.env.ARBITRUM_RPC) httpCand.push(process.env.ARBITRUM_RPC);
+-  if (process.env.ALCHEMY_KEY) httpCand.push(`https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_KEY}`);
+-  if (process.env.INFURA_KEY)  httpCand.push(`https://arbitrum-mainnet.infura.io/v3/${process.env.INFURA_KEY}`);
+-  httpCand.push(
+-    'https://arb1.arbitrum.io/rpc',
+-    'https://arbitrum-one-rpc.publicnode.com',
+-    'https://arbitrum.blockpi.network/v1/rpc/public',
+-    'https://arbitrum.drpc.org',
+-    'https://1rpc.io/arb',
+-    'https://rpc.ankr.com/arbitrum'
+-  );
+-  const seen = new Set<string>();
+-  const httpList = httpCand.filter(u => u && !seen.has(u) && seen.add(u));
+-
+-  for (const url of httpList) {
+-    if (await probeHttp(url)) {
+-      console.log('[provider] HTTP using', url);
+-      return new JsonRpcProvider(url, 42161, { staticNetwork: true });
+-    }
+-  }
+-
+-  // Если HTTP не доступен — пробуем WSS
+-  const wsCand: string[] = [];
+-  if (process.env.ARBITRUM_WSS) wsCand.push(process.env.ARBITRUM_WSS);
+-  if (process.env.ALCHEMY_KEY) wsCand.push(`wss://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_KEY}`);
+-  if (process.env.INFURA_KEY)  wsCand.push(`wss://arbitrum-mainnet.infura.io/ws/v3/${process.env.INFURA_KEY}`);
+-  const wsSeen = new Set<string>();
+-  const wsList = wsCand.filter(u => u && !wsSeen.has(u) && wsSeen.add(u));
+-
+-  for (const url of wsList) {
+-    if (await probeWs(url)) {
+-      console.log('[provider] WSS using', url);
+-      return new WebSocketProvider(url, 42161);
+-    }
+-  }
+-  throw new Error('No reachable Arbitrum RPC over HTTP or WSS; set ALCHEMY_KEY/INFURA_KEY or ARBITRUM_RPC/ARBITRUM_WSS');
++  // === 1) PRIVATE HTTP: env → Alchemy → Infura
++  const privHttp: string[] = [];
++  if (process.env.ARBITRUM_RPC) privHttp.push(process.env.ARBITRUM_RPC);
++  if (process.env.ALCHEMY_KEY) privHttp.push(`https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_KEY}`);
++  if (process.env.INFURA_KEY)  privHttp.push(`https://arbitrum-mainnet.infura.io/v3/${process.env.INFURA_KEY}`);
++
++  const seen1 = new Set<string>();
++  const listPrivHttp = privHttp.filter(u => u && !seen1.has(u) && seen1.add(u));
++  for (const url of listPrivHttp) {
++    if (await probeHttp(url)) {
++      console.log('[provider] HTTP (private) using', url);
++      return new JsonRpcProvider(url, 42161, { staticNetwork: true });
++    }
++  }
++
++  // === 2) PRIVATE WSS: env → Alchemy → Infura
++  const privWss: string[] = [];
++  if (process.env.ARBITRUM_WSS) privWss.push(process.env.ARBITRUM_WSS);
++  if (process.env.ALCHEMY_KEY) privWss.push(`wss://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_KEY}`);
++  if (process.env.INFURA_KEY)  privWss.push(`wss://arbitrum-mainnet.infura.io/ws/v3/${process.env.INFURA_KEY}`);
++
++  const seen2 = new Set<string>();
++  const listPrivWss = privWss.filter(u => u && !seen2.has(u) && seen2.add(u));
++  for (const url of listPrivWss) {
++    if (await probeWs(url)) {
++      console.log('[provider] WSS (private) using', url);
++      return new WebSocketProvider(url, 42161);
++    }
++  }
++
++  // === 3) PUBLIC HTTP: fallback
++  const pubHttp: string[] = [
++    'https://arb1.arbitrum.io/rpc',
++    'https://arbitrum-one-rpc.publicnode.com',
++    'https://arbitrum.blockpi.network/v1/rpc/public',
++    'https://arbitrum.drpc.org',
++    'https://1rpc.io/arb',
++    'https://rpc.ankr.com/arbitrum',
++  ];
++  const seen3 = new Set<string>();
++  const listPubHttp = pubHttp.filter(u => u && !seen3.has(u) && seen3.add(u));
++  for (const url of listPubHttp) {
++    if (await probeHttp(url)) {
++      console.log('[provider] HTTP (public) using', url);
++      return new JsonRpcProvider(url, 42161, { staticNetwork: true });
++    }
++  }
++
++  // === 4) PUBLIC WSS: fallback
++  const pubWss: string[] = [
++    'wss://arbitrum-one-rpc.publicnode.com',
++    'wss://arbitrum.blockpi.network/v1/ws/public',
++    'wss://arbitrum.drpc.org',
++  ];
++  const seen4 = new Set<string>();
++  const listPubWss = pubWss.filter(u => u && !seen4.has(u) && seen4.add(u));
++  for (const url of listPubWss) {
++    if (await probeWs(url)) {
++      console.log('[provider] WSS (public) using', url);
++      return new WebSocketProvider(url, 42161);
++    }
++  }
++
++  throw new Error('No reachable Arbitrum RPC (private HTTP/WSS or public HTTP/WSS). Set ALCHEMY_KEY/INFURA_KEY or ARBITRUM_RPC/WSS.');
+ }
