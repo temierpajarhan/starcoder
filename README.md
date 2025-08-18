@@ -28,18 +28,24 @@ cp .env.example .env
 
 pnpm hardhat compile
 pnpm hardhat run scripts/deploy.hardhat.ts --network arbitrum
+# The command above prints the FlashFloopExecutor address.
+# Use this value for --executor in runOnce; do NOT pass the Balancer Vault (0xBA122...) address.
 
 # Try a dry run (adjust sample market & amount):
 pnpm ts-node scripts/simulate.ts   --market 0xf78452e0f5c0b95fc5dc8353b8cd1e06e53fa25b   --loanToken 0x5979D7b546E38E414F7E9822514be443A4800529   --amount 2   --loops 1
 
 # If sim ≥ minProfit, execute once:
-pnpm ts-node scripts/runOnce.ts   --executor <DEPLOYED_EXECUTOR>   --market 0xf78452e0f5c0b95fc5dc8353b8cd1e06e53fa25b   --loanToken 0x5979D7b546E38E414F7E9822514be443A4800529   --amount 2   --loops 1   --minProfit 0.001
+pnpm ts-node scripts/runOnce.ts   --executor <DEPLOYED_EXECUTOR>   --market 0xf78452e0f5c0b95fc5dc8353b8cd1e06e53fa25b   --loanToken 0x5979D7b546E38E414F7E9822514be443A4800529   --amount 2   --loops 1   --minProfit 0.001   --slippageBps 50
 ```
 
 ### Parameter notes
 - `--loanToken` should be a token accepted by the market’s **SY** as `tokenIn` **without aggregator** (to avoid extra routing). For **wstETH markets** use **wstETH** (Arbitrum: `0x5979...0529`). For **weETH markets**, use **weETH**, etc.
 - Choose a **future maturity** (e.g., **wstETH – 24 Jun 2026** market: `0xf78452e0...fa25b`) to avoid expired PT.
 - Balancer flash loan **fee is 0%** according to docs; code still treats it generically.
+- `--slippageBps` controls swap slippage (50 = 0.5%).
+- The script checks `ARBITRUM_RPC`/`PRIVATE_KEY`, enforces **chainId 42161**, verifies contract bytecode, and writes each attempt to `runs/<timestamp>/run.json` with tx-hash, gas and profit.
+- GLP/GMX markets are blocked unless `GLP_OK=1` is set in the environment.
+- `RPC_QPS` limits RPC requests per second (default 10), and per-account/market locks in `.locks/` avoid nonce and market races while logging profit and gas for each run.
 
 ## Safety
 - All target calls are executed **in order**. If any step fails or the balance can’t cover `amount + fee + minProfit`, the entire tx **reverts** (no principal risk).
