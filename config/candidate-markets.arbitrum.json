@@ -1,0 +1,9 @@
+{
+  "arbitrum": [
+    "0xf78452e0f5c0b95fc5dc8353b8cd1e06e53fa25b"
+  ],
+  "loanToken": "0x5979D7b546E38E414F7E9822514be443A4800529",
+  "amount": "0.10",
+  "decimals": 18
+}
+

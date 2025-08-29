@@ -7,14 +7,19 @@
     "build": "hardhat compile",
     "deploy": "hardhat run scripts/deploy.hardhat.ts --network arbitrum",
     "simulate": "ts-node scripts/simulate.ts",
-    "runOnce": "ts-node scripts/runOnce.ts"
+    "runOnce": "ts-node scripts/runOnce.ts",
+    "runAndMeasure": "ts-node --esm scripts/runAndMeasure.ts",
+    "scan": "ts-node --esm scripts/scanMarkets.ts config/candidate-markets.arbitrum.json",
+    "enum:markets": "ts-node --esm scripts/enumMarkets.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "ethers": "^6.13.2",
     "@types/node": "^20.12.12",
     "commander": "^12.1.0",
-    "viem": "^2.21.28"
+    "viem": "^2.21.28",
+    "undici": "^6.19.8",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "hardhat": "^2.22.10",

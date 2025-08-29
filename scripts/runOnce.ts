@@ -53,8 +53,8 @@ async function main() {
   // Build calldata batch for N loops
   const router = new ethers.Contract(routerAddr, routerAbi, provider);
   const approxZero = { guessMin: 0, guessMax: 0, guessOffchain: 0, maxIteration: 0, eps: 0 };
-  const emptyLimit = { limitRouter: ethers.ZeroAddress, epsSkipMarket: 0, normalFills: [], flashFills: [], optData: "0x" };
-  const zeroSwapData = { swapType: 0, extRouter: ethers.ZeroAddress, extCalldata: "0x", needScale: false };
+  const emptyLimitTuple = [ethers.ZeroAddress, 0, [], [], "0x"] as const;
+  const zeroSwapDataTuple = [0, ethers.ZeroAddress, "0x", false] as const;
 
   const targets: string[] = [];
   const datas: string[] = [];
@@ -62,54 +62,65 @@ async function main() {
   let curIn = amount;
 
   for (let i = 0; i < loops; i++) {
-    // Approve router to spend loanToken (idempotent)
+    // Approve router to spend loanToken and PT (idempotent)
     targets.push(loanToken);
+    datas.push(new ethers.Interface(Erc20Abi).encodeFunctionData('approve', [routerAddr, ethers.MaxUint256]));
+    targets.push(PT);
     datas.push(new ethers.Interface(Erc20Abi).encodeFunctionData('approve', [routerAddr, ethers.MaxUint256]));
 
     // mint PY from token (no aggregator)
-    const tokenInput = {
-      tokenIn: loanToken,
-      netTokenIn: curIn,
-      tokenMintSy: SY,
-      pendleSwap: ethers.ZeroAddress,
-      swapData: zeroSwapData
-    };
+    const tokenInputTuple = [
+      loanToken,
+      curIn,
+      SY,
+      ethers.ZeroAddress,
+      zeroSwapDataTuple
+    ];
     targets.push(routerAddr);
     datas.push(new ethers.Interface(routerAbi).encodeFunctionData('mintPyFromToken', [
-      wallet.address, // receiver of PT & YT (executor will transfer later if needed)
+      opts.executor, // mint PT & YT to executor itself (holds balances for subsequent sells)
       YT,
       0,
-      tokenInput
+      tokenInputTuple
     ]));
 
+    // preview net PY (PT amount) for swap leg
+    const [netPyOut] = await router.mintPyFromToken.staticCall(
+      opts.executor,
+      YT,
+      0,
+      tokenInputTuple,
+      { value: 0 }
+    );
+
     // sell PT → token
-    const tokenOut = {
-      tokenOut: loanToken,
-      minTokenOut: 0,
-      tokenRedeemSy: SY,
-      pendleSwap: ethers.ZeroAddress,
-      swapData: zeroSwapData
-    };
+    const tokenOutTuple = [
+      loanToken,
+      0,
+      SY,
+      ethers.ZeroAddress,
+      zeroSwapDataTuple
+    ];
     targets.push(routerAddr);
     datas.push(new ethers.Interface(routerAbi).encodeFunctionData('swapExactPtForToken', [
-      wallet.address, market, curIn, tokenOut, emptyLimit
+      wallet.address, market, netPyOut, tokenOutTuple, emptyLimitTuple
     ]));
 
     // OPTIONAL: sell leftover YT to cover any tiny fee/rounding; leave to user for now.
     // For fully automatic coverage, you could encode 'swapExactYtForToken' here as well.
   }
 
-  // Assemble flash plan
-  const plan = {
+  // Assemble flash plan (as tuple for ABI without component names)
+  const planTuple = [
     targets,
-    calldatas: datas,
+    datas,
     loanToken,
-    loanAmount: amount,
+    amount,
     minProfit,
-    profitRecipient: recipient
-  };
+    recipient
+  ] as const;
 
-  const tx = await executor.execute(plan);
+  const tx = await executor.execute(planTuple);
   console.log('Submitted tx:', tx.hash);
   const rc = await tx.wait();
   console.log('Mined in block', rc.blockNumber);
