@@ -29,6 +29,8 @@ contract FlashFloopExecutor {
     error NotOwner();
     error BadLengths();
     error InsufficientProfit(uint256 have, uint256 need);
+    error UnexpectedLoanToken(address expected, address actual);
+    error UnexpectedLoanAmount(uint256 expected, uint256 actual);
     error ExternalCallFailed(uint256 index, bytes reason);
 
     address public immutable vault;
@@ -83,6 +85,13 @@ contract FlashFloopExecutor {
         require(msg.sender == vault, "only vault");
         (address[] memory targets, bytes[] memory datas, address loanToken, uint256 loanAmount, uint256 minProfit, address to)
             = abi.decode(userData, (address[], bytes[], address, uint256, uint256, address));
+
+        if (tokens.length != 1 || tokens[0] != loanToken) {
+            revert UnexpectedLoanToken(loanToken, tokens.length == 0 ? address(0) : tokens[0]);
+        }
+        if (amounts.length != 1 || amounts[0] != loanAmount) {
+            revert UnexpectedLoanAmount(loanAmount, amounts.length == 0 ? 0 : amounts[0]);
+        }
 
         // Run pipeline
         for (uint256 i = 0; i < targets.length; i++) {
