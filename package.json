@@ -19,8 +19,11 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^2.1.0",
     "@nomicfoundation/hardhat-ethers": "^3.0.5",
     "@nomicfoundation/hardhat-verify": "^2.0.6",
+    "@types/chai": "4.3.11",
+    "chai": "4.3.10",
     "hardhat": "^2.22.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
